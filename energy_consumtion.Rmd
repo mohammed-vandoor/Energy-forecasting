@@ -1,0 +1,488 @@
+---
+title: "energy consumption forecasting"
+author: "Mohammed_Nihal"
+date: "3/29/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### loading librarys
+
+```{r message=FALSE}
+library(RMySQL)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(ggpubr)
+library(ggpmisc)
+library(plotly)
+library(tidyr)
+library(ggfortify)
+library(forecast)
+```
+
+
+
+### Connecting to the database 
+
+```{r}
+con <- dbConnect(MySQL(), user='deepAnalytics', password='Sqltask1234!', dbname='dataanalytics2018', host='data-analytics-2018.cbrosir2cswx.us-east-1.rds.amazonaws.com')
+```
+
+
+### List the tables contained in the database 
+
+```{r}
+dbListTables(con)
+```
+### Import the table from database
+
+```{r warning=FALSE}
+yr_2006<-dbGetQuery(con,'select * from yr_2006')
+yr_2007<-dbGetQuery(con,'select * from yr_2007')
+yr_2008<-dbGetQuery(con,'select * from yr_2008')
+yr_2009<-dbGetQuery(con,'select * from yr_2009')
+yr_2010<-dbGetQuery(con,'select * from yr_2010')
+```
+
+
+### Combine tables into one dataframe using dplyr
+
+```{r}
+energy_consumption <- bind_rows(yr_2006,yr_2007,yr_2008,yr_2009,yr_2010)
+```
+
+### Combine Date and Time attribute values in a new attribute column
+
+```{r}
+energy_consumption <-cbind(energy_consumption,paste(energy_consumption$Date,energy_consumption$Time), stringsAsFactors=FALSE)
+```
+
+### Give the new attribute in the 11th column a header name 
+
+```{r}
+colnames(energy_consumption)[11] <-"DateTime"
+```
+
+### Move the DateTime attribute within the dataset
+
+```{r}
+energy_consumption <- energy_consumption[,c(ncol(energy_consumption), 1:(ncol(energy_consumption)-1))]
+```
+
+### Create a dataset filtering unwanted variables
+
+```{r}
+power_cal=energy_consumption %>% 
+  select(DateTime,Global_active_power,Global_reactive_power,Sub_metering_1,Sub_metering_2,Sub_metering_3,Date) %>% 
+  mutate(remaing_power=Global_active_power*(1000/60)-Sub_metering_1-Sub_metering_2-Sub_metering_3) %>% 
+  mutate(Global_active_power=Global_active_power*1000/60) %>% 
+  mutate(Global_reactive_power=Global_reactive_power*1000/60)
+```
+
+### Convert DateTime from POSIXlt to POSIXct
+
+```{r}
+power_cal$DateTime <- as.POSIXct(power_cal$DateTime,format="%Y-%m-%d %H:%M:%S",tz="Europe/Paris")
+```
+
+
+
+
+### Create "year",month,day,week,etc attribute with lubridate
+
+```{r}
+power_cal$year <- year(power_cal$DateTime)
+power_cal$month <- month(power_cal$DateTime)
+power_cal$quarter<-quarter(power_cal$DateTime)
+power_cal$day<-day(power_cal$DateTime)
+power_cal$week<-week(power_cal$DateTime)
+power_cal$hour<-hour(power_cal$DateTime)
+power_cal$minute<-minute(power_cal$DateTime)
+power_cal$weekday<-weekdays(power_cal$DateTime)
+
+
+```
+
+### Plot the graph of active power during the whole time period
+
+```{r fig.height = 10, fig.width = 5}
+power_cal %>% filter(year!='2006') %>% ggplot(aes(DateTime,Global_active_power))+geom_line()+facet_wrap(year~.,scales = 'free_x',ncol = 1)
+```
+
+
+
+
+
+
+
+
+
+### Plotiing submeter 1 reading during a day
+
+```{r}
+c<-power_cal %>% filter(year == 2008 & month == 1 & day == 9)
+plot_ly(c,x = ~c$hour, y=~c$Sub_metering_1, type = 'scatter', mode = 'lines')
+```
+
+
+
+
+
+
+
+### Plot sub-meter 1, 2 and 3 with title, legend and labels - All observations
+
+
+```{r}
+c <- filter(power_cal, year == 2008 & month == 1 & day == 9 & (minute == 0 | minute == 10 | minute == 20 | minute == 30 | minute == 40 | minute == 50))
+plot_ly(c,x = ~c$hour, y=~c$Sub_metering_1,name='Kitchen', type = 'scatter', mode = 'lines')%>% 
+ add_trace(y=~c$Sub_metering_2,name='laundary',mode='lines') %>% 
+ add_trace(y=~c$Sub_metering_3,name='Heater and Ac',mode='lines') %>% 
+  layout(title = "Power Consumption January 9th, 2008",  xaxis = list(title = "Time"),yaxis=list(title = "Power (watt-hours)"))
+
+```
+
+
+
+
+### Pie chart of overall submeter reading during 12 to 17 hours
+
+```{r}
+power_cal %>% filter(year==2008,month==1,12<=hour,hour<=17) %>% select(Sub_metering_1,Sub_metering_2,Sub_metering_3)%>% 
+  rename(kitchen=Sub_metering_1,laundry=Sub_metering_2,heater_and_AC=Sub_metering_3) %>% 
+  gather("Stat", "Value") %>% 
+  plot_ly(labels = ~Stat, values = ~Value, type = 'pie') %>% 
+ layout(title = 'One month overall submeter reading during 12 to 17 hrs',
+         xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
+         yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE))
+```
+
+
+### Pie chart of sub meter usage in a day 
+
+```{r}
+power_cal %>% filter(year!=2006) %>% select(Sub_metering_1,Sub_metering_2,Sub_metering_3)%>% 
+  rename(kitchen=Sub_metering_1,laundry=Sub_metering_2,heater_and_AC=Sub_metering_3) %>% 
+  gather("Stat", "Value") %>% 
+  plot_ly(labels = ~Stat, values = ~Value, type = 'pie') %>% 
+ layout(title = 'Overall submeter reading',
+         xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
+         yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE))
+```
+
+
+### Pie chart of sub meter usage in whole year 
+
+```{r}
+power_cal %>% filter(year==2009) %>% select(Sub_metering_1,Sub_metering_2,Sub_metering_3) %>%  rename(kitchen=Sub_metering_1,laundry=Sub_metering_2,heater_and_AC=Sub_metering_3)%>% 
+  gather("Stat", "Value") %>% 
+  plot_ly(labels = ~Stat, values = ~Value, type = 'pie') %>% 
+ layout(title = 'Overall submeter reading',
+         xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
+         yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE))
+```
+
+### Bar diagram for the active power usage in 2007
+
+```{r}
+power_cal %>% filter(year==2007) %>% group_by(month) %>% summarise(Global_active_power=sum(Global_active_power)) %>% 
+ggplot(aes(x=month,y=Global_active_power))+geom_col()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+### Each submeter reading in each year
+
+```{r message=FALSE}
+power_cal %>%  group_by(year) %>% summarise(kitchen=sum(Sub_metering_1),laundry=sum(Sub_metering_2),
+                                                                    heater_and_AC=sum(Sub_metering_3),remaing_power=sum(remaing_power))%>% 
+  gather("Stat", "Value", -year) %>% 
+  ggplot(aes(x = year, y = Value, fill = Stat)) +
+  geom_col(position = "dodge")+ggtitle("Sub meter reading of each year")
+
+
+```
+
+### power usage in each quarter of year
+
+```{r}
+power_cal %>% filter(year!=2006) %>% group_by(quarter) %>% summarise(kitchen=mean(Sub_metering_1),laundry=mean(Sub_metering_2),
+                                                                    heater_and_AC=mean(Sub_metering_3),remaing_power=mean(remaing_power))%>% gather("Stat", "Value", -quarter) %>% 
+  ggplot(aes(x = quarter, y = Value, fill = Stat)) +
+  geom_col(position = "dodge")+ggtitle("power usage in each quarter")
+
+
+```
+
+
+
+
+
+
+### power usage in each month of year
+
+```{r}
+power_cal %>% filter(year!=2006) %>% group_by(month) %>% summarise(kitchen=mean(Sub_metering_1),laundry=mean(Sub_metering_2),
+                                                              heater_and_AC=mean(Sub_metering_3))%>% gather("Stat", "Value", -month) %>% 
+  ggplot(aes(x = month, y = Value, fill = Stat)) +
+  geom_col()+ggtitle("power usage in each month of year")
+
+```
+
+
+
+
+
+
+
+### Power usage in each day of a month
+
+```{r}
+
+c<-power_cal %>% filter(year==2008,month==1) 
+plot_ly(c,x = ~c$day, y=~c$Sub_metering_1,name='Kitchen', type = 'scatter', mode = 'lines')%>% 
+ add_trace(y=~c$Sub_metering_2,name='laundary',mode='lines') %>% 
+ add_trace(y=~c$Sub_metering_3,name='Heater and Ac',mode='lines') %>% 
+  layout(title = "Power Consumption January, 2008",  xaxis = list(title = "Time"),yaxis=list(title = "Power (watt-hours)"))
+```
+
+
+
+### power usahe during a week
+
+```{r}
+
+c<-power_cal %>% filter(year==2008,month==1,week==2) 
+plot_ly(c,x = ~c$weekday, y=~c$Sub_metering_1,name='Kitchen', type = 'bar')%>% 
+ add_trace(y=~c$Sub_metering_2,name='laundary') %>% 
+ add_trace(y=~c$Sub_metering_3,name='Heater and Ac') %>% 
+  layout(title = "Power Consumption in each day",  xaxis = list(title = "day"),yaxis=list(title = "Power (watt-hours)"))
+```
+
+
+
+
+
+### power usage in tuesday
+
+```{r}
+
+c<-power_cal %>% filter(year==2008,month==1,week==2,weekday=='Tuesday') 
+plot_ly(c,x = ~c$hour, y=~c$Sub_metering_1,name='Kitchen', type = 'bar')%>% 
+ add_trace(y=~c$Sub_metering_2,name='laundary') %>% 
+ add_trace(y=~c$Sub_metering_3,name='Heater and Ac') %>% 
+  layout(title = "Power Consumption January, 2008",  xaxis = list(title = "Time"),yaxis=list(title = "Power (watt-hours)"))
+```
+
+
+
+
+### power usage in saturday
+
+```{r}
+
+c<-power_cal %>% filter(year==2008,month==1,day==14) 
+plot_ly(c,x = ~c$hour, y=~c$Sub_metering_1,name='Kitchen', type = 'bar')%>% 
+ add_trace(y=~c$Sub_metering_2,name='laundary') %>% 
+ add_trace(y=~c$Sub_metering_3,name='Heater and Ac') %>% 
+  layout(title = "Power Consumption January, 2008",  xaxis = list(title = "Time"),yaxis=list(title = "Power (watt-hours)"),barmode='overlay')
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### time series for the sub meter 1 reading 
+
+```{r}
+a=power_cal %>% filter(year!=2006) %>% 
+ group_by(week,month,year) %>% summarise(Sub_metering_1=mean(Sub_metering_1))
+tswsb1=ts(a$Sub_metering_1,frequency = 52,start = c(2007,1),end = c(2010,11))
+autoplot(tswsb1,xlab = "Time", ylab = "Watt Hours", main = " sub_meter_1 ")
+```
+
+
+
+### linear regression forcasting for sub meter 1
+
+```{r}
+ftswsb1 <- tslm(tswsb1~ trend + season)
+forecastfitSM3c <- forecast(ftswsb1, h=20, level=c(80,90))
+plot(forecastfitSM3c, ylab= "Watt-Hours", xlab="Time")
+```
+
+
+### Decompose components for sub meter 1
+
+```{r}
+
+componentsb1<-decompose(tswsb1)
+plot(componentsb1)
+```
+
+
+
+
+### Ets method forcasting for submeter 1
+
+```{r}
+
+tswsb1 %>% forecast( h=32,level=c(80,95), fan=FALSE) %>% autoplot()
+
+  
+```
+
+
+### time series for the sub meter 2 reading 
+
+```{r}
+a=power_cal %>% filter(year!=2006) %>% 
+ group_by(week,month,year) %>% summarise(Sub_metering_2=mean(Sub_metering_2))
+tswsb2=ts(a$Sub_metering_2,frequency = 52,start = c(2007,1),end = c(2010,11))
+autoplot(tswsb2, ts.colour= 'red', xlab = "Time", ylab = "Watt Hours", main = " sub_meter_2 ")
+```
+
+
+### Ets forecast for sub meter 2 
+
+```{r}
+tswsb2 %>% forecast( h=32,level=c(80,95), fan=FALSE) %>% autoplot()
+
+```
+
+### Decompose components of submeter2 
+```{r}
+
+componentsb1<-decompose(tswsb2)
+plot(componentsb1)
+```
+
+
+### time series for the sub meter 3 reading 
+
+```{r}
+a=power_cal %>% filter(year!=2006) %>% 
+ group_by(week,month,year) %>% summarise(Sub_metering_3=sum(Sub_metering_3))
+tswsb3=ts(a$Sub_metering_3,frequency = 52,start = c(2007,1),end = c(2010,11))
+autoplot(tswsb3, xlab = "Time", ylab = "Watt Hours", main = " sub_meter_3 ")
+```
+
+
+
+
+### Decompose components of submeter 3
+
+```{r}
+componentsb3<-decompose(tswsb3)
+plot(componentsb3)
+```
+
+
+### Ets forecast for sub meter 3 
+
+```{r}
+tswsb3 %>% forecast( h=32,level=c(80,95), fan=FALSE) %>% autoplot()
+```
+
+
+### time series for the remaining meter reading 
+
+```{r}
+a=power_cal %>% filter(year!=2006) %>% 
+ group_by(week,month,year) %>% summarise(remaing_power=sum(remaing_power))
+tswr=ts(a$remaing_power,frequency = 52,start = c(2007,1),end = c(2010,11))
+autoplot(tswr, xlab = "Time", ylab = "Watt Hours", main = " Remaining power")
+```
+
+
+
+### Decompose components of remaining power usage
+
+```{r}
+
+componentsb1<-decompose(tswr)
+plot(componentsb1)
+```
+### create timeseries of overall power usage in months 
+```{r}
+a=power_cal %>% filter(year!=2006) %>% 
+ group_by(month,year) %>% summarise(Global_active_power=mean(Global_active_power))
+tsmap=ts(a$Global_active_power,frequency = 12,start = c(2007,1),end = c(2010,11))
+autoplot(tsmap,  xlab = "Time", ylab = "Watt Hours", main = "active power ")
+```
+
+
+### linear regression forcast of overall power usage 
+
+```{r}
+ftsm <- tslm(tsmap~ trend + season)
+forecastfitSM3c <- forecast(ftsm, h=20, level=c(80,90))
+plot(forecastfitSM3c, ylim = c(0, 30), ylab= "Watt-Hours", xlab="Time") 
+```
+
+
+### Holt trend method for overall active power usage
+
+```{r}
+fc <- holt(tsmap, h=12)
+fc2 <- holt(tsmap, damped=TRUE, phi = 0.9, h=12)
+autoplot(tsmap) +
+  autolayer(fc2, series="Damped Holt's method", PI=FALSE) +
+  ggtitle("Forecasts from Holt's method") + xlab("year") +
+  ylab("overall power usage ") +
+  guides(colour=guide_legend(title="Forecast"))
+```
+
+### Holt winter method for overall active power usage
+
+```{r}
+fit1 <- hw(tsmap,damped = TRUE,seasonal="additive")
+fit2 <- hw(tsmap,damped = TRUE, seasonal="multiplicative")
+autoplot(tsmap) +
+  autolayer(fit1, series="HW additive forecasts", PI=FALSE) +
+  autolayer(fit2, series="HW multiplicative forecasts",
+    PI=FALSE) +
+  xlab("Year") +
+  ylab("power usage") +
+  ggtitle("overall power usage") +
+  guides(colour=guide_legend(title="Forecast"))
+```
+
+### seasonal plot of active power
+
+```{r}
+ggseasonplot(tsmap, year.labels=TRUE, year.labels.left=TRUE) +
+  ylab("power usage") +
+  ggtitle("Seasonal plot: active power")
+```
+
+
+
